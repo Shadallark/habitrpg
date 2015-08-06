@@ -433,6 +433,11 @@ api.wrap = (user, main=true) ->
       # User
       # ------
 
+      prepRandomValues: (req, cb) ->
+        for i in [2..0]
+          user.randoms[i] = Math.random()
+        cb? null, user.randoms
+
       update: (req, cb) ->
         _.each req.body, (v,k) ->
           user.fns.dotSet(k,v);true
@@ -934,7 +939,7 @@ api.wrap = (user, main=true) ->
           user.stats.hp += 15
           user.stats.hp = 50 if user.stats.hp > 50
         else if item.key is 'armoire'
-          armoireResult = user.fns.predictableRandom(user.stats.gp)
+          armoireResult = user.randoms[0]
           # We use a different seed to choose the Armoire action than we use
           # to choose the sub-action, otherwise only some of the foods can
           # be given. E.g., if a seed gives armoireResult < .5 (food) then
@@ -955,10 +960,11 @@ api.wrap = (user, main=true) ->
             message = i18n.t('armoireFood', {image: '<span class="Pet_Food_'+drop.key+' pull-left"></span>', dropArticle: drop.article, dropText: drop.text(req.language)}, req.language)
             armoireResp = {type: "food", dropKey: drop.key, dropArticle: drop.article, dropText: drop.text(req.language)}
           else
-            armoireExp = Math.floor(user.fns.predictableRandom(user.stats.exp) * 40 + 10)
+            armoireExp = Math.floor(user.randoms[1] * 40 + 10)
             user.stats.exp += armoireExp
             message = i18n.t('armoireExp', req.language)
             armoireResp = {"type": "experience", "value": armoireExp}
+          user.ops.prepRandomValues(req)
         else
           user.items.gear.equipped[item.type] = item.key
           user.items.gear.owned[item.key] = true
@@ -1383,7 +1389,7 @@ api.wrap = (user, main=true) ->
               if direction is 'down'
                 delta = calculateDelta() # recalculate delta for unchecking so the gp and exp come out correctly
               addPoints() # obviously for delta>0, but also a trick to undo accidental checkboxes
-              # MP++ per checklist item in ToDo, bonus per CLI
+              # MP++ per checklist item in To-Do, bonus per CLI
               multiplier = _.max([(_.reduce(task.checklist,((m,i)->m+(if i.completed then 1 else 0)),1)),1])
               gainMP(_.max([(multiplier), (.01 * user._statsComputed.maxMP * multiplier)]) * if direction is 'down' then -1 else 1)
 
@@ -1405,6 +1411,7 @@ api.wrap = (user, main=true) ->
         if typeof window is 'undefined'
           user.fns.randomDrop({task, delta}, req) if direction is 'up'
 
+        user.ops.prepRandomValues req
         cb? null, user
         return delta
 
@@ -1453,7 +1460,7 @@ api.wrap = (user, main=true) ->
     ###
     randomVal: (obj, options) ->
       array = if options?.key then _.keys(obj) else _.values(obj)
-      rand = user.fns.predictableRandom(options?.seed)
+      rand = user.randoms[2]
       array.sort()
       array[Math.floor(rand * array.length)]
 
@@ -1489,21 +1496,16 @@ api.wrap = (user, main=true) ->
 
       chance = api.diminishingReturns(chance, 0.75)
 
-      #console.log("Drop chance: " + chance)
-
       quest = content.quests[user.party.quest?.key]
       if quest?.collect and user.fns.predictableRandom(user.stats.gp) < chance
         dropK = user.fns.randomVal quest.collect, {key:true}
         user.party.quest.progress.collect[dropK]++
         user.markModified? 'party.quest.progress'
-        #console.log {progress:user.party.quest.progress}
 
       dropMultiplier = if user.purchased?.plan?.customerId then 2 else 1
       return if (api.daysSince(user.items.lastDrop.date, user.preferences) is 0) and (user.items.lastDrop.count >= dropMultiplier * (5 + Math.floor(user._statsComputed.per / 25) + (user.contributor.level or 0)))
       if user.flags?.dropsEnabled and user.fns.predictableRandom(user.stats.exp) < chance
 
-        # current breakdown - 1% (adjustable) chance on drop
-        # If they got a drop: 50% chance of egg, 50% Hatching Potion. If hatchingPotion, broken down further even further
         rarity = user.fns.predictableRandom(user.stats.gp)
 
         # Food: 40% chance
@@ -1514,7 +1516,7 @@ api.wrap = (user, main=true) ->
           drop.type = 'Food'
           drop.dialog = i18n.t('messageDropFood', {dropArticle: drop.article, dropText: drop.text(req.language), dropNotes: drop.notes(req.language)}, req.language)
 
-          # Eggs: 30% chance
+        # Eggs: 30% chance
         else if rarity > .3
           drop = user.fns.randomVal _.where(content.eggs,{canBuy:true})
           user.items.eggs[drop.key] ?= 0
@@ -1522,7 +1524,7 @@ api.wrap = (user, main=true) ->
           drop.type = 'Egg'
           drop.dialog = i18n.t('messageDropEgg', {dropText: drop.text(req.language), dropNotes: drop.notes(req.language)}, req.language)
 
-          # Hatching Potion, 30% chance - break down by rarity.
+        # Hatching Potion, 30% chance - break down by rarity.
         else
           acceptableDrops =
           # Very Rare: 10% (of 30%)
@@ -1534,8 +1536,6 @@ api.wrap = (user, main=true) ->
               # Common: 40% (of 30%)
             else ['Base', 'White', 'Desert']
 
-          # No Rarity (@see https://github.com/HabitRPG/habitrpg/issues/1048, we may want to remove rareness when we add mounts)
-          #drop = helpers.randomVal hatchingPotions
           drop = user.fns.randomVal _.pick(content.hatchingPotions, ((v,k) -> k in acceptableDrops))
 
           user.items.hatchingPotions[drop.key] ?= 0
@@ -1550,11 +1550,6 @@ api.wrap = (user, main=true) ->
         user.items.lastDrop.date = +new Date
         user.items.lastDrop.count++
 
-    ###
-      Updates user stats with new stats. Handles death, leveling up, etc
-      {stats} new stats
-      {update} if aggregated changes, pass in userObj as update. otherwise commits will be made immediately
-    ###
     autoAllocate: ->
       user.stats[(->
         switch user.preferences.allocationMode
@@ -1583,6 +1578,11 @@ api.wrap = (user, main=true) ->
           else "str" # if all else fails, dump into STR
       )()]++
 
+    ###
+      Updates user stats with new stats. Handles death, leveling up, etc
+      {stats} new stats
+      {update} if aggregated changes, pass in userObj as update. otherwise commits will be made immediately
+    ###
     updateStats: (stats, req, analytics) ->
       # Game Over (death)
       return user.stats.hp=0 if stats.hp <= 0
@@ -1653,7 +1653,7 @@ api.wrap = (user, main=true) ->
     ###
 
     ###
-      At end of day, add value to all incomplete Daily & Todo tasks (further incentive)
+      At end of day, add value to all incomplete Daily & To-do tasks (further incentive)
       For incomplete Dailys, deduct experience
       Make sure to run this function once in a while as server will not take care of overnight calculations.
       And you have to run it every time client connects.
@@ -1738,7 +1738,7 @@ api.wrap = (user, main=true) ->
         return unless task
         {id, completed} = task
 
-        # Deduct points for missed Daily tasks, but not for Todos (just increase todo's value)
+        # Deduct points for missed Daily tasks, but not for Todos (just increase to-do's value)
         EvadeTask = 0
         scheduleMisses = daysMissed
         if completed
@@ -1814,6 +1814,8 @@ api.wrap = (user, main=true) ->
       dailyChecked=1 if dailyDueUnchecked is 0 and dailyChecked is 0
       user.stats.mp += _.max([10,.1 * user._statsComputed.maxMP]) * dailyChecked / (dailyDueUnchecked + dailyChecked)
       user.stats.mp = user._statsComputed.maxMP if user.stats.mp > user._statsComputed.maxMP
+
+      user.ops.prepRandomValues()
 
       # Analytics
       user.flags.cronCount?=0

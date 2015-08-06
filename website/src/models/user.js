@@ -89,6 +89,7 @@ var UserSchema = new Schema({
 
   balance: {type: Number, 'default':0},
   filters: {type: Schema.Types.Mixed, 'default': {}},
+  randoms: {type: Array, 'default': []},
 
   purchased: {
     ads: {type: Boolean, 'default': false},
